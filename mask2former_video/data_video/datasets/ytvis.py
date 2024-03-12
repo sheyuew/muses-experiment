@@ -111,6 +111,9 @@ YTVIS_CATEGORIES_2021 = [
     {"color": [199, 100, 0], "isthing": 1, "id": 40, "name": "zebra"},
 ]
 
+MARSYN_CATEGORIES = [
+    {"color": [106, 0, 228], "isthing": 1, "id": 1, "name": "boat"},
+]
 
 def _get_ytvis_2019_instances_meta():
     thing_ids = [k["id"] for k in YTVIS_CATEGORIES_2019 if k["isthing"] == 1]
@@ -134,6 +137,20 @@ def _get_ytvis_2021_instances_meta():
     # Mapping from the incontiguous YTVIS category id to an id in [0, 39]
     thing_dataset_id_to_contiguous_id = {k: i for i, k in enumerate(thing_ids)}
     thing_classes = [k["name"] for k in YTVIS_CATEGORIES_2021 if k["isthing"] == 1]
+    ret = {
+        "thing_dataset_id_to_contiguous_id": thing_dataset_id_to_contiguous_id,
+        "thing_classes": thing_classes,
+        "thing_colors": thing_colors,
+    }
+    return ret
+
+def _get_marsyn_instances_meta():
+    thing_ids = [k["id"] for k in MARSYN_CATEGORIES if k["isthing"] == 1]
+    thing_colors = [k["color"] for k in MARSYN_CATEGORIES if k["isthing"] == 1]
+    assert len(thing_ids) == 1, len(thing_ids)
+    # Mapping from the incontiguous YTVIS category id to an id in [0, 39]
+    thing_dataset_id_to_contiguous_id = {k: i for i, k in enumerate(thing_ids)}
+    thing_classes = [k["name"] for k in MARSYN_CATEGORIES if k["isthing"] == 1]
     ret = {
         "thing_dataset_id_to_contiguous_id": thing_dataset_id_to_contiguous_id,
         "thing_classes": thing_classes,
@@ -303,13 +320,17 @@ if __name__ == "__main__":
     import sys
     from PIL import Image
 
+    import sys
+    sys.path.append("/home/viewegm/video_segmentation/video_segmentation/mask2former_video/data_video/datasets")
+
+
     logger = setup_logger(name=__name__)
     #assert sys.argv[3] in DatasetCatalog.list()
     meta = MetadataCatalog.get("ytvis_2019_train")
 
-    json_file = "./datasets/ytvis/instances_train_sub.json"
-    image_root = "./datasets/ytvis/train/JPEGImages"
-    dicts = load_ytvis_json(json_file, image_root, dataset_name="ytvis_2019_train")
+    json_file = "/home/viewegm/data/ytvis_2021/train.json"
+    image_root = "/home/viewegm/data/ytvis_2021/train/JPEGImages"
+    dicts = load_ytvis_json(json_file, image_root, dataset_name="ytvis_2021_train")
     logger.info("Done loading {} samples.".format(len(dicts)))
 
     dirname = "ytvis-data-vis"

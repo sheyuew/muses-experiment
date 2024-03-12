@@ -249,6 +249,11 @@ def setup(args):
     add_maskformer2_video_config(cfg)
     cfg.merge_from_file(args.config_file)
     cfg.merge_from_list(args.opts)
+
+    # my changes
+    cfg.c = "/home/viewegm/models/mask2former_video/eval"  # needs attribute for some reason
+    #
+
     cfg.freeze()
     default_setup(cfg, args)
     # Setup logger for "mask_former" module
@@ -262,7 +267,7 @@ def main(args):
 
     if args.eval_only:
         model = Trainer.build_model(cfg)
-        DetectionCheckpointer(model, save_dir=cfg.OUTPUT_DIR).resume_or_load(
+        DetectionCheckpointer(model, save_dir=cfg.c).resume_or_load(
             cfg.MODEL.WEIGHTS, resume=args.resume
         )
         res = Trainer.test(cfg, model)
@@ -274,11 +279,34 @@ def main(args):
 
     trainer = Trainer(cfg)
     trainer.resume_or_load(resume=args.resume)
-    return trainer.train()
 
+    # Freezing all layers, but the class and mask predictor
+    for name, param in trainer.model.named_parameters():
+        # if "transformer" in name or "pixel_decoder" in name or "backbone" in name:  # everything besides transformer and pixel_decoder
+        if name.startswith("sem_seg_head.predictor.class") or name.startswith("sem_seg_head.predictor.mask_embed"):
+            param.requires_grad = True
+        else:
+            param.requires_grad = False
+
+        print(name, param.size(), param.requires_grad)
+        
+    return trainer.train()
 
 if __name__ == "__main__":
     args = default_argument_parser().parse_args()
+
+    if no_args := True:
+        if evaluation_run := True:
+            args.config_file = "/home/viewegm/video_segmentation/video_segmentation/ship_demo_video/configs/ship_R50.yaml"
+            args.eval_only = True
+            args.resume = True
+            args.opts = ["MODEL.WEIGHTS", "/home/viewegm/models/mask2former_video/trained_models/model_0002999.pth"]
+        else:
+            args.num_gpus = 1
+            args.config_file = "/home/viewegm/video_segmentation/video_segmentation/ship_demo_video/configs/ship_R50.yaml"
+            args.resume = True
+            args.opts = ["MODEL.WEIGHTS", "/home/viewegm/models/mask2former_video/trained_models/model_0002999.pth"]
+        
     print("Command Line Args:", args)
     launch(
         main,
