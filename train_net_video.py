@@ -283,12 +283,12 @@ def main(args):
     # Freezing all layers, but the class and mask predictor
     for name, param in trainer.model.named_parameters():
         # if "transformer" in name or "pixel_decoder" in name or "backbone" in name:  # everything besides transformer and pixel_decoder
-        if name.startswith("sem_seg_head.predictor.class") or name.startswith("sem_seg_head.predictor.mask_embed"):
+        if name.startswith("sem_seg_head.predictor.motion") or name.startswith("sem_seg_head.predictor.class") or name.startswith("sem_seg_head.predictor.mask_embed"):
             param.requires_grad = True
+            print(name, param.size(), param.requires_grad)
         else:
             param.requires_grad = False
-
-        print(name, param.size(), param.requires_grad)
+        
         
     return trainer.train()
 
@@ -296,16 +296,20 @@ if __name__ == "__main__":
     args = default_argument_parser().parse_args()
 
     if no_args := True:
-        if evaluation_run := True:
+        if train_from_start := True: 
+            args.num_gpus = 1
+            args.config_file = "/home/viewegm/video_segmentation/video_segmentation/ship_demo_video/configs/ship_R50.yaml"
+            args.resume = False
+        elif evaluation_run := False:
             args.config_file = "/home/viewegm/video_segmentation/video_segmentation/ship_demo_video/configs/ship_R50.yaml"
             args.eval_only = True
             args.resume = True
-            args.opts = ["MODEL.WEIGHTS", "/home/viewegm/models/mask2former_video/trained_models/model_0002999.pth"]
+            args.opts = ["MODEL.WEIGHTS", "/home/viewegm/models/mask2former_video/trained_models/model_0000099.pth"]
         else:
             args.num_gpus = 1
             args.config_file = "/home/viewegm/video_segmentation/video_segmentation/ship_demo_video/configs/ship_R50.yaml"
             args.resume = True
-            args.opts = ["MODEL.WEIGHTS", "/home/viewegm/models/mask2former_video/trained_models/model_0002999.pth"]
+            args.opts = ["MODEL.WEIGHTS", "/home/viewegm/models/mask2former_video/trained_models/model_0000099.pth"]
         
     print("Command Line Args:", args)
     launch(

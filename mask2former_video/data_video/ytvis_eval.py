@@ -272,9 +272,10 @@ def instances_to_coco_json_video(inputs, outputs):
     scores = outputs["pred_scores"]
     labels = outputs["pred_labels"]
     masks = outputs["pred_masks"]
+    motions = outputs["pred_motion"]
 
     ytvis_results = []
-    for instance_id, (s, l, m) in enumerate(zip(scores, labels, masks)):
+    for instance_id, (s, l, m, mt) in enumerate(zip(scores, labels, masks, motions)):
         segms = [
             mask_util.encode(np.array(_mask[:, :, None], order="F", dtype="uint8"))[0]
             for _mask in m
@@ -287,6 +288,7 @@ def instances_to_coco_json_video(inputs, outputs):
             "score": s,
             "category_id": l,
             "segmentations": segms,
+            "motion": mt,
         }
         ytvis_results.append(res)
 

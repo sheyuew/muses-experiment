@@ -75,7 +75,7 @@ class VideoHungarianMatcher(nn.Module):
     while the others are un-matched (and thus treated as non-objects).
     """
 
-    def __init__(self, cost_class: float = 1, cost_mask: float = 1, cost_dice: float = 1, num_points: int = 0):
+    def __init__(self, cost_class: float = 1, cost_mask: float = 1, cost_dice: float = 1, cost_motion = 1, num_points: int = 0):
         """Creates the matcher
 
         Params:
@@ -87,8 +87,9 @@ class VideoHungarianMatcher(nn.Module):
         self.cost_class = cost_class
         self.cost_mask = cost_mask
         self.cost_dice = cost_dice
+        self.cost_motion = cost_motion
 
-        assert cost_class != 0 or cost_mask != 0 or cost_dice != 0, "all costs cant be 0"
+        assert cost_class != 0 or cost_mask != 0 or cost_dice != 0 or cost_motion != 0, "all costs cant be 0"
 
         self.num_points = num_points
 
@@ -109,6 +110,10 @@ class VideoHungarianMatcher(nn.Module):
             # but approximate it in 1 - proba[target class].
             # The 1 is a constant that doesn't change the matching, it can be ommitted.
             cost_class = -out_prob[:, tgt_ids]
+
+            # Testing only remove TODO
+            out_prob_motion = outputs["pred_motion"][b].softmax(-1)  # [num_queries, num_classes]
+            cost_motion = -out_prob_motion[:, tgt_ids]
 
             out_mask = outputs["pred_masks"][b]  # [num_queries, T, H_pred, W_pred]
             # gt masks are already padded when preparing target
@@ -145,6 +150,7 @@ class VideoHungarianMatcher(nn.Module):
                 self.cost_mask * cost_mask
                 + self.cost_class * cost_class
                 + self.cost_dice * cost_dice
+                + self.cost_motion * cost_motion
             )
             C = C.reshape(num_queries, -1).cpu()
 
@@ -184,6 +190,7 @@ class VideoHungarianMatcher(nn.Module):
             "cost_class: {}".format(self.cost_class),
             "cost_mask: {}".format(self.cost_mask),
             "cost_dice: {}".format(self.cost_dice),
+            "cost_motion: {}".format(self.cost_motion),
         ]
         lines = [head] + [" " * _repr_indent + line for line in body]
         return "\n".join(lines)

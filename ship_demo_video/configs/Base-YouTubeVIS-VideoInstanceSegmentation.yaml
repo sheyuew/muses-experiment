@@ -18,8 +18,8 @@ DATASETS:
   TRAIN: ("marsyn_train",)
   TEST: ("marsyn_test",)
 SOLVER:
-  CHECKPOINT_PERIOD: 300  # Saved every n'th iteration
-  IMS_PER_BATCH: 16
+  CHECKPOINT_PERIOD: 200  # Saved every n'th iteration
+  IMS_PER_BATCH: 8 # 16
   BASE_LR: 0.0001
   STEPS: (5500,)
   MAX_ITER: 8000

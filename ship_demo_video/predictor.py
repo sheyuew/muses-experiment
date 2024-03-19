@@ -55,17 +55,20 @@ class VisualizationDemo(object):
         pred_labels = predictions["pred_labels"]
         pred_masks = predictions["pred_masks"]
 
-        # Visualize: 
+        confidence_threshold = 10**(-8)
+        highest_confidence = [pred_scores.index(p) for p in predictions['pred_scores'] if p > confidence_threshold] 
+        pred_scores = [predictions["pred_scores"][idx] for idx in highest_confidence]
+        pred_labels = [predictions["pred_labels"][idx] for idx in highest_confidence]
+        pred_masks = [predictions["pred_masks"][idx] for idx in highest_confidence]
+
         """
         from PIL import Image
         import numpy as np
 
-        k_best = np.argpartition(pred_scores, k:=-1)[k]  # https://stackoverflow.com/questions/34226400/find-the-index-of-the-k-smallest-values-of-a-numpy-array
-        pred_scores = [predictions["pred_scores"][k_best]]
-        pred_labels = [predictions["pred_labels"][k_best]]
-        pred_masks = [predictions["pred_masks"][k_best]]
+        # Visualize: 
 
-        
+        np.argpartition(pred_scores, -3)[-3:]  # https://stackoverflow.com/questions/34226400/find-the-index-of-the-k-smallest-values-of-a-numpy-array
+        pred_scores = [predictions["pred_scores"][idx] for idx in highest_confidence]
         mask = pred_masks[0][0]
         mask_image = Image.fromarray(mask.cpu().numpy().astype(np.uint8) * 255)
         mask_image.save('/home/viewegm/output_mask.png')

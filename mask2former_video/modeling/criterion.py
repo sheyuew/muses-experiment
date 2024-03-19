@@ -17,6 +17,38 @@ from detectron2.projects.point_rend.point_features import (
 
 from mask2former.utils.misc import is_dist_avail_and_initialized
 
+class PoseLoss(nn.Module):
+    """
+    Taken from https://github.com/youngguncho/PoseNet-Pytorch/blob/master/model.py
+    """
+    def __init__(self, device='cpu', sx=0.0, sq=0.0, learn_beta=False):
+        super(PoseLoss, self).__init__()
+        self.learn_beta = learn_beta
+        self.device = device
+
+        if not self.learn_beta:
+            self.sx = 0
+            self.sq = -6.25
+            
+        self.sx = nn.Parameter(torch.Tensor([sx]), requires_grad=self.learn_beta)
+        self.sq = nn.Parameter(torch.Tensor([sq]), requires_grad=self.learn_beta)
+
+        self.loss_print = None
+
+    def forward(self, pred_x, pred_q, target_x, target_q):
+        pred_q = F.normalize(pred_q, p=2, dim=1)
+        loss_x = F.l1_loss(pred_x, target_x)
+        loss_q = F.l1_loss(pred_q, target_q)
+
+            
+        loss = torch.exp(-self.sx.to(self.device))*loss_x \
+               + self.sx.to(self.device) \
+               + torch.exp(-self.sq.to(self.device))*loss_q \
+               + self.sq.to(self.device)
+
+        self.loss_print = [loss.item(), loss_x.item(), loss_q.item()]
+
+        return loss, loss_x.item(), loss_q.item()
 
 def dice_loss(
         inputs: torch.Tensor,
@@ -137,6 +169,49 @@ class VideoSetCriterion(nn.Module):
         losses = {"loss_ce": loss_ce}
         return losses
     
+    def loss_motion(self, outputs, targets, indices, num_masks):
+        """Motion loss (PoseNet)
+        targets dicts must contain the key "labels" containing a tensor of dim [nb_target_boxes]
+        """
+        assert "pred_motion" in outputs
+        # src_motion = outputs["pred_motion"]  # (B, T, 6)
+        # motion_tensors = torch.cat([t["motion"][J] for t, (_, J) in zip(targets, indices)])
+
+        motion_list = []
+        src_motion_list = []
+        for i, (t, (_, J)) in enumerate(zip(targets, indices)): 
+            motion_obj = t["motion"][J]
+            if all(motion_obj.shape):  # Only adding valid annotations
+                motion_list.append(motion_obj)
+                src_motion_list.append(outputs["pred_motion"][i])  # only take filtered outputs
+        
+
+        if len(src_motion_list) == 0: 
+            return {"loss_motion": torch.tensor(0.0)}
+        
+        motion_tensors = torch.cat(motion_list)
+        motion_tensors = motion_tensors[:, 0, :]
+        src_motion = torch.cat(src_motion_list)
+        
+        if not torch.any(motion_tensors):
+            # getting invalid motion
+            return {"loss_motion": torch.tensor(0.0)}
+        
+        loss_motion_criterion = PoseLoss(device='cuda:0')
+        est_pos = src_motion[:, :3]
+        est_rot = src_motion[:, 3:]
+        label_pos = motion_tensors[:, :3]        
+        label_rot = motion_tensors[:, 3:]
+
+        if est_pos.shape != label_pos.shape:  # Not enough annotations, only compare existing annos with outputs
+            n_clipped_targets = label_pos.shape[0]
+            est_pos = est_pos[:n_clipped_targets, :]
+            est_rot = est_rot[:n_clipped_targets, :]
+        loss_motion, _, _ = loss_motion_criterion(est_pos, est_rot, label_pos, label_rot)
+        
+        losses = {"loss_motion": loss_motion}
+        return losses
+    
     def loss_masks(self, outputs, targets, indices, num_masks):
         """Compute the losses related to the masks: the focal loss and the dice loss.
         targets dicts must contain the key "masks" containing a tensor of dim [nb_target_boxes, h, w]
@@ -153,6 +228,8 @@ class VideoSetCriterion(nn.Module):
         # NT x 1 x H x W
         src_masks = src_masks.flatten(0, 1)[:, None]
         target_masks = target_masks.flatten(0, 1)[:, None]
+
+        torch.cuda.empty_cache()  # free up memory
 
         with torch.no_grad():
             # sample point_coords
@@ -201,6 +278,7 @@ class VideoSetCriterion(nn.Module):
         loss_map = {
             'labels': self.loss_labels,
             'masks': self.loss_masks,
+            'motion': self.loss_motion,
         }
         assert loss in loss_map, f"do you really want to compute {loss} loss?"
         return loss_map[loss](outputs, targets, indices, num_masks)

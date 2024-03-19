@@ -100,16 +100,18 @@ class VideoMaskFormer(nn.Module):
         class_weight = cfg.MODEL.MASK_FORMER.CLASS_WEIGHT
         dice_weight = cfg.MODEL.MASK_FORMER.DICE_WEIGHT
         mask_weight = cfg.MODEL.MASK_FORMER.MASK_WEIGHT
+        motion_weight = cfg.MODEL.MASK_FORMER.MOTION_WEIGHT
 
         # building criterion
         matcher = VideoHungarianMatcher(
             cost_class=class_weight,
             cost_mask=mask_weight,
             cost_dice=dice_weight,
+            cost_motion=motion_weight,
             num_points=cfg.MODEL.MASK_FORMER.TRAIN_NUM_POINTS,
         )
 
-        weight_dict = {"loss_ce": class_weight, "loss_mask": mask_weight, "loss_dice": dice_weight}
+        weight_dict = {"loss_ce": class_weight, "loss_mask": mask_weight, "loss_dice": dice_weight, "loss_motion": motion_weight}
 
         if deep_supervision:
             dec_layers = cfg.MODEL.MASK_FORMER.DEC_LAYERS
@@ -118,7 +120,7 @@ class VideoMaskFormer(nn.Module):
                 aux_weight_dict.update({k + f"_{i}": v for k, v in weight_dict.items()})
             weight_dict.update(aux_weight_dict)
 
-        losses = ["labels", "masks"]
+        losses = ["labels", "masks", "motion"] 
 
         criterion = VideoSetCriterion(
             sem_seg_head.num_classes,
@@ -204,8 +206,10 @@ class VideoMaskFormer(nn.Module):
         else:
             mask_cls_results = outputs["pred_logits"]
             mask_pred_results = outputs["pred_masks"]
+            mask_motion_results = outputs["pred_motion"]
 
             mask_cls_result = mask_cls_results[0]
+            mask_motion_result = mask_motion_results[0]
             # upsample masks
             mask_pred_result = retry_if_cuda_oom(F.interpolate)(
                 mask_pred_results[0],
@@ -222,7 +226,7 @@ class VideoMaskFormer(nn.Module):
             height = input_per_image.get("height", image_size[0])  # raw image size before data augmentation
             width = input_per_image.get("width", image_size[1])
 
-            return retry_if_cuda_oom(self.inference_video)(mask_cls_result, mask_pred_result, image_size, height, width)
+            return retry_if_cuda_oom(self.inference_video)(mask_cls_result, mask_pred_result, mask_motion_result, image_size, height, width)
 
     def prepare_targets(self, targets, images):
         h_pad, w_pad = images.tensor.shape[-2:]
@@ -231,34 +235,43 @@ class VideoMaskFormer(nn.Module):
             _num_instance = len(targets_per_video["instances"][0])
             mask_shape = [_num_instance, self.num_frames, h_pad, w_pad]
             gt_masks_per_video = torch.zeros(mask_shape, dtype=torch.bool, device=self.device)
-
+            gt_motion_per_video = []
             gt_ids_per_video = []
+
             for f_i, targets_per_frame in enumerate(targets_per_video["instances"]):
                 targets_per_frame = targets_per_frame.to(self.device)
                 h, w = targets_per_frame.image_size
 
                 gt_ids_per_video.append(targets_per_frame.gt_ids[:, None])
                 gt_masks_per_video[:, f_i, :h, :w] = targets_per_frame.gt_masks.tensor
+                if len(targets_per_frame.gt_motion) == 0:  # motion is not loaded from instances
+                    camera_pose = torch.zeros(4, 4, device=self.device)
+                    gt_motion_per_video.append(camera_pose)
+                else:
+                    gt_motion_per_video.append(targets_per_frame.gt_motion)
 
             gt_ids_per_video = torch.cat(gt_ids_per_video, dim=1)
             valid_idx = (gt_ids_per_video != -1).any(dim=-1)
 
+            gt_motion_per_video = torch.stack(gt_motion_per_video, dim=1)
+
             gt_classes_per_video = targets_per_frame.gt_classes[valid_idx]          # N,
             gt_ids_per_video = gt_ids_per_video[valid_idx]                          # N, num_frames
 
-            gt_instances.append({"labels": gt_classes_per_video, "ids": gt_ids_per_video})
-            gt_masks_per_video = gt_masks_per_video[valid_idx].float()          # N, num_frames, H, W
+            gt_instances.append({"labels": gt_classes_per_video, "ids": gt_ids_per_video, "motion": gt_motion_per_video})
+            gt_masks_per_video = gt_masks_per_video[valid_idx].to(torch.uint8)          # N, num_frames, H, W, change to uint8 due to space
             gt_instances[-1].update({"masks": gt_masks_per_video})
 
         return gt_instances
 
-    def inference_video(self, pred_cls, pred_masks, img_size, output_height, output_width):
+    def inference_video(self, pred_cls, pred_masks, pred_motion, img_size, output_height, output_width):
         if len(pred_cls) > 0:
             scores = F.softmax(pred_cls, dim=-1)[:, :-1]
             labels = torch.arange(self.sem_seg_head.num_classes, device=self.device).unsqueeze(0).repeat(self.num_queries, 1).flatten(0, 1)
             # keep top-10 predictions
             scores_per_image, topk_indices = scores.flatten(0, 1).topk(10, sorted=False)
             labels_per_image = labels[topk_indices]
+            motion_per_image = pred_motion  # [-1, -1, -1, -1, -1, -1]
             topk_indices = topk_indices // self.sem_seg_head.num_classes
             pred_masks = pred_masks[topk_indices]
 
@@ -272,16 +285,19 @@ class VideoMaskFormer(nn.Module):
             out_scores = scores_per_image.tolist()
             out_labels = labels_per_image.tolist()
             out_masks = [m for m in masks.cpu()]
+            out_motion = motion_per_image.tolist()
         else:
             out_scores = []
             out_labels = []
             out_masks = []
+            out_motion = []
 
         video_output = {
             "image_size": (output_height, output_width),
             "pred_scores": out_scores,
             "pred_labels": out_labels,
             "pred_masks": out_masks,
+            "pred_motion": out_motion,
         }
 
         return video_output

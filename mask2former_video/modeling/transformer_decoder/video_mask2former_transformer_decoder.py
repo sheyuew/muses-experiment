@@ -337,6 +337,7 @@ class VideoMultiScaleMaskedTransformerDecoder(nn.Module):
         if self.mask_classification:
             self.class_embed = nn.Linear(hidden_dim, num_classes + 1)
         self.mask_embed = MLP(hidden_dim, hidden_dim, mask_dim, 3)
+        self.motion_embed = MLP(hidden_dim, hidden_dim, motion_param_n:=6, num_layers=3)
 
     @classmethod
     def from_config(cls, cfg, in_channels, mask_classification):
@@ -398,11 +399,13 @@ class VideoMultiScaleMaskedTransformerDecoder(nn.Module):
 
         predictions_class = []
         predictions_mask = []
+        predictions_motion = []
 
         # prediction heads on learnable query features
-        outputs_class, outputs_mask, attn_mask = self.forward_prediction_heads(output, mask_features, attn_mask_target_size=size_list[0])
+        outputs_class, outputs_mask, outputs_motion, attn_mask = self.forward_prediction_heads(output, mask_features, attn_mask_target_size=size_list[0])
         predictions_class.append(outputs_class)
         predictions_mask.append(outputs_mask)
+        predictions_motion.append(outputs_motion)
 
         for i in range(self.num_layers):
             level_index = i % self.num_feature_levels
@@ -426,17 +429,19 @@ class VideoMultiScaleMaskedTransformerDecoder(nn.Module):
                 output
             )
 
-            outputs_class, outputs_mask, attn_mask = self.forward_prediction_heads(output, mask_features, attn_mask_target_size=size_list[(i + 1) % self.num_feature_levels])
+            outputs_class, outputs_mask, outputs_motion, attn_mask = self.forward_prediction_heads(output, mask_features, attn_mask_target_size=size_list[(i + 1) % self.num_feature_levels])
             predictions_class.append(outputs_class)
             predictions_mask.append(outputs_mask)
+            predictions_motion.append(outputs_motion)
 
         assert len(predictions_class) == self.num_layers + 1
 
         out = {
             'pred_logits': predictions_class[-1],
             'pred_masks': predictions_mask[-1],
+            'pred_motion': predictions_motion[-1], 
             'aux_outputs': self._set_aux_loss(
-                predictions_class if self.mask_classification else None, predictions_mask
+                predictions_class if self.mask_classification else None, predictions_mask, predictions_motion
             )
         }
         return out
@@ -445,6 +450,7 @@ class VideoMultiScaleMaskedTransformerDecoder(nn.Module):
         decoder_output = self.decoder_norm(output)
         decoder_output = decoder_output.transpose(0, 1)
         outputs_class = self.class_embed(decoder_output)
+        outputs_motion = self.motion_embed(decoder_output)
         mask_embed = self.mask_embed(decoder_output)
         outputs_mask = torch.einsum("bqc,btchw->bqthw", mask_embed, mask_features)
         b, q, t, _, _ = outputs_mask.shape
@@ -458,17 +464,17 @@ class VideoMultiScaleMaskedTransformerDecoder(nn.Module):
         attn_mask = (attn_mask.sigmoid().flatten(2).unsqueeze(1).repeat(1, self.num_heads, 1, 1).flatten(0, 1) < 0.5).bool()
         attn_mask = attn_mask.detach()
 
-        return outputs_class, outputs_mask, attn_mask
+        return outputs_class, outputs_mask, outputs_motion, attn_mask
 
     @torch.jit.unused
-    def _set_aux_loss(self, outputs_class, outputs_seg_masks):
+    def _set_aux_loss(self, outputs_class, outputs_seg_masks, output_motion):
         # this is a workaround to make torchscript happy, as torchscript
         # doesn't support dictionary with non-homogeneous values, such
         # as a dict having both a Tensor and a list.
         if self.mask_classification:
             return [
-                {"pred_logits": a, "pred_masks": b}
-                for a, b in zip(outputs_class[:-1], outputs_seg_masks[:-1])
+                {"pred_logits": a, "pred_masks": b, "pred_motion": c}
+                for a, b, c in zip(outputs_class[:-1], outputs_seg_masks[:-1], output_motion[:-1])
             ]
         else:
             return [{"pred_masks": b} for b in outputs_seg_masks[:-1]]

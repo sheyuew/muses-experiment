@@ -61,7 +61,8 @@ def _get_dummy_anno(num_classes):
         "id": -1,
         "bbox": np.array([0, 0, 0, 0]),
         "bbox_mode": BoxMode.XYXY_ABS,
-        "segmentation": [np.array([0.0] * 6)]
+        "segmentation": [np.array([0.0] * 6)],
+        "camera_pose": [0.0] * 6,
     }
 
 
@@ -92,6 +93,10 @@ def ytvis_annotations_to_instances(annos, image_size):
     ids = [int(obj["id"]) for obj in annos]
     ids = torch.tensor(ids, dtype=torch.int64)
     target.gt_ids = ids
+
+    # Add motion annotations
+    motion = [obj["camera_pose"] for obj in annos]
+    target.motion = motion
 
     if len(annos) and "segmentation" in annos[0]:
         segms = [obj["segmentation"] for obj in annos]
@@ -204,6 +209,7 @@ class YTVISDatasetMapper:
 
         video_annos = dataset_dict.pop("annotations", None)
         file_names = dataset_dict.pop("file_names", None)
+        motion_annos = dataset_dict.pop("camera_pose", None)
 
         if self.is_train:
             _ids = set()
@@ -216,12 +222,15 @@ class YTVISDatasetMapper:
         dataset_dict["image"] = []
         dataset_dict["instances"] = []
         dataset_dict["file_names"] = []
+        dataset_dict["camera_pose"] = []
         for frame_idx in selected_idx:
             dataset_dict["file_names"].append(file_names[frame_idx])
 
             # Read image
             image = utils.read_image(file_names[frame_idx], format=self.image_format)
             utils.check_image_size(dataset_dict, image)
+
+            dataset_dict['camera_pose'].append(motion_annos[frame_idx])
 
             aug_input = T.AugInput(image)
             transforms = self.augmentations(aug_input)
