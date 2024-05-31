@@ -4,6 +4,7 @@
 import contextlib
 import io
 import json
+import random
 import logging
 import numpy as np
 import os
@@ -237,6 +238,7 @@ Category ids in annotations are not in [1, #categories]! We'll apply a mapping f
         video_id = record["video_id"] = vid_dict["id"]
 
         video_objs = []
+        camera_objs = []
         for frame_idx in range(record["length"]):
             frame_objs = []
             camera_poses_per_frame = []
@@ -250,14 +252,14 @@ Category ids in annotations are not in [1, #categories]! We'll apply a mapping f
                 _bboxes = anno.get("bboxes", None)
                 _segm = anno.get("segmentations", None)
 
-                #if not (_bboxes and _segm and _bboxes[frame_idx] and _segm[frame_idx]):
-                #    continue
+                if not (_bboxes and _segm and _bboxes[frame_idx] and _segm[frame_idx]):
+                    continue
 
-                bbox = [-1, -1, -1, -1]  # Needs bbox value to accept segmentation 
-                if _segm: 
-                    segm = _segm[0]  #[frame_idx] TODO: How to accept multiple instances?
-                else:
-                    segm = None
+                bbox = _bboxes[frame_idx]  #bbox = [-1, -1, -1, -1]  # Needs bbox value to accept segmentation 
+                #if len(_segm) > frame_idx: 
+                segm = _segm[frame_idx]  ## TODO: How to accept multiple instances?
+                #else:
+                #    segm = None
 
                 obj["bbox"] = bbox
                 obj["bbox_mode"] = BoxMode.XYWH_ABS
@@ -277,9 +279,11 @@ Category ids in annotations are not in [1, #categories]! We'll apply a mapping f
                 if id_map:
                     obj["category_id"] = id_map[obj["category_id"]]
                 frame_objs.append(obj)
+
             video_objs.append(frame_objs)
-            record["camera_pose"].append(camera_poses_per_frame)
+            camera_objs.append(camera_poses_per_frame)
         record["annotations"] = video_objs
+        record["camera_pose"] = camera_objs
         dataset_dicts.append(record)
 
     if num_instances_without_valid_segmentation > 0:

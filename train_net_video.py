@@ -296,7 +296,7 @@ if __name__ == "__main__":
     args = default_argument_parser().parse_args()
 
     if no_args := True:
-        if train_from_start := True: 
+        if train_from_start := False: 
             args.num_gpus = 1
             args.config_file = "/home/viewegm/video_segmentation/video_segmentation/ship_demo_video/configs/ship_R50.yaml"
             args.resume = False
@@ -304,12 +304,12 @@ if __name__ == "__main__":
             args.config_file = "/home/viewegm/video_segmentation/video_segmentation/ship_demo_video/configs/ship_R50.yaml"
             args.eval_only = True
             args.resume = True
-            args.opts = ["MODEL.WEIGHTS", "/home/viewegm/models/mask2former_video/trained_models/model_0000099.pth"]
+            args.opts = ["MODEL.WEIGHTS", "/home/viewegm/models/ship/model_0000999_all_loss.pth"]
         else:
             args.num_gpus = 1
             args.config_file = "/home/viewegm/video_segmentation/video_segmentation/ship_demo_video/configs/ship_R50.yaml"
-            args.resume = True
-            args.opts = ["MODEL.WEIGHTS", "/home/viewegm/models/mask2former_video/trained_models/model_0000099.pth"]
+            # args.resume = True
+            # args.opts = ["MODEL.WEIGHTS", "/home/viewegm/models/ship/model_0000399_all_loss2.pth"]
         
     print("Command Line Args:", args)
     launch(

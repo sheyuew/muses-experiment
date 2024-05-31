@@ -218,7 +218,7 @@ class YTVOSeval:
         ious = np.zeros([len(d), len(g)])
         for i, j in np.ndindex(ious.shape):
             ious[i, j] = iou_seq(d[i], g[j])
-        #print(vidId, catId, ious.shape, ious)
+        print(vidId, catId, ious.shape, ious)
         return ious
 
     def computeOks(self, imgId, catId):

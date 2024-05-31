@@ -55,13 +55,13 @@ class VisualizationDemo(object):
         pred_labels = predictions["pred_labels"]
         pred_masks = predictions["pred_masks"]
 
+        """
         confidence_threshold = 10**(-8)
         highest_confidence = [pred_scores.index(p) for p in predictions['pred_scores'] if p > confidence_threshold] 
         pred_scores = [predictions["pred_scores"][idx] for idx in highest_confidence]
         pred_labels = [predictions["pred_labels"][idx] for idx in highest_confidence]
         pred_masks = [predictions["pred_masks"][idx] for idx in highest_confidence]
 
-        """
         from PIL import Image
         import numpy as np
 

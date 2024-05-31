@@ -95,8 +95,8 @@ def ytvis_annotations_to_instances(annos, image_size):
     target.gt_ids = ids
 
     # Add motion annotations
-    motion = [obj["camera_pose"] for obj in annos]
-    target.motion = motion
+    # motion = [obj["camera_pose"] for obj in annos]
+    # target.motion = motion
 
     if len(annos) and "segmentation" in annos[0]:
         segms = [obj["segmentation"] for obj in annos]
@@ -209,7 +209,7 @@ class YTVISDatasetMapper:
 
         video_annos = dataset_dict.pop("annotations", None)
         file_names = dataset_dict.pop("file_names", None)
-        motion_annos = dataset_dict.pop("camera_pose", None)
+        # motion_annos = dataset_dict.pop("camera_pose", None)
 
         if self.is_train:
             _ids = set()
@@ -230,7 +230,7 @@ class YTVISDatasetMapper:
             image = utils.read_image(file_names[frame_idx], format=self.image_format)
             utils.check_image_size(dataset_dict, image)
 
-            dataset_dict['camera_pose'].append(motion_annos[frame_idx])
+            # dataset_dict['camera_pose'].append(motion_annos[frame_idx])
 
             aug_input = T.AugInput(image)
             transforms = self.augmentations(aug_input)

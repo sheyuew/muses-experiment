@@ -1,13 +1,13 @@
 _BASE_: Base-YouTubeVIS-VideoInstanceSegmentation.yaml
 MODEL:
-  WEIGHTS: "/home/viewegm/models/mask2former_video/trained_models/model_0000099.pth"  # "/home/viewegm/models/mask2former_video/trained_models/model_0002999.pth"
+  WEIGHTS: "/home/viewegm/models/ship/model_0000799.pth" # "/home/viewegm/models/mask2former_video/instance_segmentation/ytvis_2021/model_final_b8aae2.pkl" #"/home/viewegm/models/ship/model_0000399_all_loss2.pth"  # "/home/viewegm/models/mask2former_video/trained_models/model_0002999.pth"
   META_ARCHITECTURE: "VideoMaskFormer"
   SEM_SEG_HEAD:
     NAME: "MaskFormerHead"
     IGNORE_VALUE: 255
-    NUM_CLASSES: 1
+    NUM_CLASSES: 40  # 1
     LOSS_WEIGHT: 1.0
-    CONVS_DIM: 256
+    CONVS_DIM: 256 
     MASK_DIM: 256
     NORM: "GN"
     # pixel decoder

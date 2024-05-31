@@ -174,6 +174,8 @@ class VideoSetCriterion(nn.Module):
         targets dicts must contain the key "labels" containing a tensor of dim [nb_target_boxes]
         """
         assert "pred_motion" in outputs
+        # return {"loss_motion": torch.tensor(0.0)}
+
         # src_motion = outputs["pred_motion"]  # (B, T, 6)
         # motion_tensors = torch.cat([t["motion"][J] for t, (_, J) in zip(targets, indices)])
 
@@ -278,7 +280,7 @@ class VideoSetCriterion(nn.Module):
         loss_map = {
             'labels': self.loss_labels,
             'masks': self.loss_masks,
-            'motion': self.loss_motion,
+            # 'motion': self.loss_motion,
         }
         assert loss in loss_map, f"do you really want to compute {loss} loss?"
         return loss_map[loss](outputs, targets, indices, num_masks)
@@ -310,6 +312,7 @@ class VideoSetCriterion(nn.Module):
             losses.update(self.get_loss(loss, outputs, targets, indices, num_masks))
 
         # In case of auxiliary losses, we repeat this process with the output of each intermediate layer.
+        
         if "aux_outputs" in outputs:
             for i, aux_outputs in enumerate(outputs["aux_outputs"]):
                 indices = self.matcher(aux_outputs, targets)
@@ -317,7 +320,7 @@ class VideoSetCriterion(nn.Module):
                     l_dict = self.get_loss(loss, aux_outputs, targets, indices, num_masks)
                     l_dict = {k + f"_{i}": v for k, v in l_dict.items()}
                     losses.update(l_dict)
-
+        
         return losses
 
     def __repr__(self):
