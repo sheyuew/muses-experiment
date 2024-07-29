@@ -139,6 +139,15 @@ class YTVISEvaluator(DatasetEvaluator):
 
         self._results = OrderedDict()
         self._eval_predictions(predictions)
+
+        # Save average scores
+        scores = []
+        for element in predictions:
+            element_score = element.get("score", 0.)
+            scores.append(element_score)
+        scores_avg = np.average(scores)
+        self._results["average_score"] = scores_avg
+
         # Copy so the caller can do whatever with results
         return copy.deepcopy(self._results)
 
@@ -157,7 +166,7 @@ class YTVISEvaluator(DatasetEvaluator):
 
             reverse_id_mapping = {v: k for k, v in dataset_id_to_contiguous_id.items()}
             for result in predictions:
-                category_id = result["category_id"]
+                category_id = 0  # since only boats as category, originally: result["category_id"]
                 assert category_id < num_classes, (
                     f"A prediction has class={category_id}, "
                     f"but the dataset only has {num_classes} classes and "
@@ -188,6 +197,7 @@ class YTVISEvaluator(DatasetEvaluator):
         res = self._derive_coco_results(
             coco_eval, class_names=self._metadata.get("thing_classes")
         )
+        self._results["avg_iou"] = np.average([v for k,v in coco_eval.ious.items()])
         self._results["segm"] = res
 
     def _derive_coco_results(self, coco_eval, class_names=None):

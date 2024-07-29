@@ -174,7 +174,7 @@ class VideoSetCriterion(nn.Module):
         targets dicts must contain the key "labels" containing a tensor of dim [nb_target_boxes]
         """
         assert "pred_motion" in outputs
-        # return {"loss_motion": torch.tensor(0.0)}
+        #return {"loss_motion": torch.tensor(0.0)}
 
         # src_motion = outputs["pred_motion"]  # (B, T, 6)
         # motion_tensors = torch.cat([t["motion"][J] for t, (_, J) in zip(targets, indices)])
@@ -187,23 +187,24 @@ class VideoSetCriterion(nn.Module):
                 motion_list.append(motion_obj)
                 src_motion_list.append(outputs["pred_motion"][i])  # only take filtered outputs
         
-
         if len(src_motion_list) == 0: 
             return {"loss_motion": torch.tensor(0.0)}
         
         motion_tensors = torch.cat(motion_list)
         motion_tensors = motion_tensors[:, 0, :]
-        src_motion = torch.cat(src_motion_list)
+        #src_motion = torch.cat(src_motion_list)
+        src_idx = self._get_src_permutation_idx(indices)
+        src_motion = outputs["pred_motion"][src_idx]
         
         if not torch.any(motion_tensors):
             # getting invalid motion
             return {"loss_motion": torch.tensor(0.0)}
         
         loss_motion_criterion = PoseLoss(device='cuda:0')
-        est_pos = src_motion[:, :3]
-        est_rot = src_motion[:, 3:]
-        label_pos = motion_tensors[:, :3]        
-        label_rot = motion_tensors[:, 3:]
+        est_pos = torch.tensor(0., device='cuda:0')  #src_motion#[:, :3]
+        est_rot = src_motion#[:, 3:]
+        label_pos = torch.tensor(0., device='cuda:0') #motion_tensors#[:, :3]        
+        label_rot = motion_tensors[:, 4:7]
 
         if est_pos.shape != label_pos.shape:  # Not enough annotations, only compare existing annos with outputs
             n_clipped_targets = label_pos.shape[0]
@@ -280,7 +281,7 @@ class VideoSetCriterion(nn.Module):
         loss_map = {
             'labels': self.loss_labels,
             'masks': self.loss_masks,
-            # 'motion': self.loss_motion,
+            'motion': self.loss_motion,
         }
         assert loss in loss_map, f"do you really want to compute {loss} loss?"
         return loss_map[loss](outputs, targets, indices, num_masks)

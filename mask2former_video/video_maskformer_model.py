@@ -244,16 +244,16 @@ class VideoMaskFormer(nn.Module):
 
                 gt_ids_per_video.append(targets_per_frame.gt_ids[:, None])
                 gt_masks_per_video[:, f_i, :h, :w] = targets_per_frame.gt_masks.tensor
-                #if len(targets_per_frame.gt_motion) == 0:  # motion is not loaded from instances
-                    # camera_pose = torch.zeros(4, 4, device=self.device)s
-                    # gt_motion_per_video.append(camera_pose)
-                #else:
-                #    gt_motion_per_video.append(targets_per_frame.gt_motion)
+                if len(targets_per_frame.gt_motion) == 0:  # motion is not loaded from instances
+                    camera_pose = torch.zeros(4, 4, device=self.device)
+                    gt_motion_per_video.append(camera_pose)
+                else:
+                    gt_motion_per_video.append(targets_per_frame.gt_motion[:, f_i])
 
             gt_ids_per_video = torch.cat(gt_ids_per_video, dim=1)
             valid_idx = (gt_ids_per_video != -1).any(dim=-1)
 
-            # gt_motion_per_video = torch.stack(gt_motion_per_video, dim=1)
+            gt_motion_per_video = torch.stack(gt_motion_per_video, dim=1)
 
             gt_classes_per_video = targets_per_frame.gt_classes[valid_idx]          # N,
             gt_ids_per_video = gt_ids_per_video[valid_idx]                          # N, num_frames
