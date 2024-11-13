@@ -57,6 +57,10 @@ class SemanticSegmentorWithTTA(nn.Module):
                 image = read_image(ret.pop("file_name"), self.model.input_format)
                 image = torch.from_numpy(np.ascontiguousarray(image.transpose(2, 0, 1)))  # CHW
                 ret["image"] = image
+            if "image_add" not in ret:
+                image_add = read_image(ret.pop["add_file_name"], self.model.input_format)
+                image_add = torch.from_numpy(np.ascontiguousarray(image_add.transpose(2, 0, 1)))
+                ret["image_add"] = image_add
             if "height" not in ret and "width" not in ret:
                 ret["height"] = image.shape[1]
                 ret["width"] = image.shape[2]

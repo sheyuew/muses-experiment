@@ -112,15 +112,20 @@ class COCOPanopticNewBaselineDatasetMapper:
         """
         dataset_dict = copy.deepcopy(dataset_dict)  # it will be modified by code below
         image = utils.read_image(dataset_dict["file_name"], format=self.img_format)
+        image_add = utils.read_image(dataset_dict["add_file_name"], format=self.img_format)
         utils.check_image_size(dataset_dict, image)
+        utils.check_image_size(dataset_dict,image_add)
 
         image, transforms = T.apply_transform_gens(self.tfm_gens, image)
+        image_add,transforms = T.apply_transform_gens(self.tfm_gens, image_add)
         image_shape = image.shape[:2]  # h, w
+        image_add_shape=image_add.shape[:2]
 
         # Pytorch's dataloader is efficient on torch.Tensor due to shared-memory,
         # but not efficient on large generic data structures due to the use of pickle & mp.Queue.
         # Therefore it's important to use torch.Tensor.
         dataset_dict["image"] = torch.as_tensor(np.ascontiguousarray(image.transpose(2, 0, 1)))
+        dataset_dict["image_add"] = torch.as_tensor(np.ascontiguousarray(image_add.transpose(2, 0, 1)))
 
         if not self.is_train:
             # USER: Modify this if you want to keep them for some reason.

@@ -1,9 +1,11 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
+import math
 from typing import Tuple
-
+import numpy as np
 import torch
 from torch import nn
 from torch.nn import functional as F
+from torch.nn.functional import pad
 
 from detectron2.config import configurable
 from detectron2.data import MetadataCatalog
@@ -12,11 +14,102 @@ from detectron2.modeling.backbone import Backbone
 from detectron2.modeling.postprocessing import sem_seg_postprocess
 from detectron2.structures import Boxes, ImageList, Instances, BitMasks
 from detectron2.utils.memory import retry_if_cuda_oom
-
 from .modeling.criterion import SetCriterion
 from .modeling.matcher import HungarianMatcher
 
+# from mmcv.cnn import trunc_normal_init,build_norm_layer
+# from mmcv.runner import BaseModule
+# from mmcv.cnn.bricks.transformer import build_dropout
+# from HRFuser.mmdet.models.backbones.hrformer import CrossFFN
+# from HRFuser.mmdet.models.utils.transformer import nchw_to_nlc
 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class CrossAttention(nn.Module):
+    def __init__(self, in_channels, num_heads=2):
+        super(CrossAttention, self).__init__()
+        self.in_channels = in_channels
+        self.num_heads = num_heads
+        self.head_dim = in_channels // num_heads
+        assert in_channels % num_heads == 0, "in_channels must be divisible by num_heads."
+
+        # 定义查询、键和值的卷积层
+        self.query_conv = nn.Conv2d(in_channels, in_channels, kernel_size=1)
+        self.key_conv = nn.Conv2d(in_channels, in_channels, kernel_size=1)
+        self.value_conv = nn.Conv2d(in_channels, in_channels, kernel_size=1)
+
+        # 可学习的缩放因子
+        self.scale = nn.Parameter(torch.ones(1, num_heads, 1, 1))
+        
+        # 通道注意力机制
+        self.channel_attention = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(in_channels, in_channels // 8, kernel_size=1),
+            nn.ReLU(),
+            nn.Conv2d(in_channels // 8, in_channels, kernel_size=1),
+            nn.Sigmoid()
+        )
+
+        # 初始化权重
+        self._init_weights()
+
+    def _init_weights(self):
+        # 初始化卷积层的权重使用 He 正态初始化
+        nn.init.kaiming_normal_(self.query_conv.weight, mode='fan_out', nonlinearity='relu')
+        nn.init.kaiming_normal_(self.key_conv.weight, mode='fan_out', nonlinearity='relu')
+        nn.init.kaiming_normal_(self.value_conv.weight, mode='fan_out', nonlinearity='relu')
+
+        if self.query_conv.bias is not None:
+            nn.init.constant_(self.query_conv.bias, 0)
+            nn.init.constant_(self.key_conv.bias, 0)
+            nn.init.constant_(self.value_conv.bias, 0)
+
+        # 缩放因子初始化为 1
+        nn.init.constant_(self.scale, 1.0)
+
+        # 通道注意力机制卷积层的初始化
+        for m in self.channel_attention:
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+
+    def forward(self, x1, x2):
+        # x1 和 x2 的形状均为 [batch_size, channels, height, width]
+        
+        # 生成查询、键和值
+        Q = self.query_conv(x1)
+        K = self.key_conv(x2)
+        V = self.value_conv(x2)
+
+        # # 检查 Q、K、V 的维度
+        # print("Q.size():", Q.size())  # 调试代码
+        # print("K.size():", K.size())  # 调试代码
+        # print("V.size():", V.size())  # 调试代码
+
+        # 获取批次大小和图像尺寸
+        batch_size, _, height, width = Q.size()
+        
+        # 将 Q, K, V 的形状调整为 [batch_size, num_heads, head_dim, height * width]
+        Q_flat = Q.view(batch_size, self.num_heads, self.head_dim, height * width)
+        K_flat = K.view(batch_size, self.num_heads, self.head_dim, height * width)
+        V_flat = V.view(batch_size, self.num_heads, self.head_dim, height * width)
+
+        # 计算注意力权重并应用缩放因子
+        attention_scores = torch.matmul(Q_flat.transpose(-2, -1), K_flat) / (self.head_dim ** 0.5)  # [batch_size, num_heads, height*width, height*width]
+        attention_weights = F.softmax(attention_scores * self.scale, dim=-1)
+
+        # 加权求和
+        context = torch.matmul(attention_weights, V_flat.transpose(-2, -1))  # [batch_size, num_heads, height*width, head_dim]
+        context = context.view(batch_size, self.in_channels, height, width)  # [batch_size, channels, height, width]
+
+        # 应用通道注意力
+        channel_att = self.channel_attention(x1)
+        context = context * channel_att
+
+        return context + x1  # 最终融合
 @META_ARCH_REGISTRY.register()
 class MaskFormer(nn.Module):
     """
@@ -27,7 +120,8 @@ class MaskFormer(nn.Module):
     def __init__(
         self,
         *,
-        backbone: Backbone,
+        backbone: Backbone, 
+        backbone_add:Backbone,
         sem_seg_head: nn.Module,
         criterion: nn.Module,
         num_queries: int,
@@ -70,6 +164,7 @@ class MaskFormer(nn.Module):
         """
         super().__init__()
         self.backbone = backbone
+        self.backbone_add = backbone 
         self.sem_seg_head = sem_seg_head
         self.criterion = criterion
         self.num_queries = num_queries
@@ -90,12 +185,19 @@ class MaskFormer(nn.Module):
         self.panoptic_on = panoptic_on
         self.test_topk_per_image = test_topk_per_image
 
+        # Initialize cross attention blocks for each scale
+        self.cross_attention_res2 = CrossAttention(in_channels=96)
+        self.cross_attention_res3 = CrossAttention(in_channels=192)
+        self.cross_attention_res4 = CrossAttention(in_channels=384)
+        self.cross_attention_res5 = CrossAttention(in_channels=768)
+
         if not self.semantic_on:
             assert self.sem_seg_postprocess_before_inference
 
     @classmethod
     def from_config(cls, cfg):
         backbone = build_backbone(cfg)
+        backbone_add=build_backbone(cfg)
         sem_seg_head = build_sem_seg_head(cfg, backbone.output_shape())
 
         # Loss parameters:
@@ -139,6 +241,7 @@ class MaskFormer(nn.Module):
 
         return {
             "backbone": backbone,
+            "backbone_add": backbone_add,
             "sem_seg_head": sem_seg_head,
             "criterion": criterion,
             "num_queries": cfg.MODEL.MASK_FORMER.NUM_OBJECT_QUERIES,
@@ -194,8 +297,49 @@ class MaskFormer(nn.Module):
         images = [(x - self.pixel_mean) / self.pixel_std for x in images]
         images = ImageList.from_tensors(images, self.size_divisibility)
 
-        features = self.backbone(images.tensor)
-        outputs = self.sem_seg_head(features)
+        images_add = [x["image_add"].to(self.device) for x in batched_inputs]
+        images_add = [(x - self.pixel_mean) / self.pixel_std for x in images_add]
+        images_add = ImageList.from_tensors(images_add, self.size_divisibility)
+        features_p1 = self.backbone(images.tensor)      # 从主干网络提取特征 P1
+        features_p2 = self.backbone_add(images_add.tensor)  # 从附加主干网络提取特征 P2
+
+        #     for key1 in features_p1:
+        #         print(key1,features_p1[key1].shape)
+        #     for key2 in features_p2:
+        #         print(key2,features_p2[key2].shape)
+
+            # 应用交叉注意力块到每个尺度的特征图
+        #     output_res2 = self.cross_attention_res2(features_p2['res2'], features_p1['res2'])
+        #     output_res3 = self.cross_attention_res3(features_p2['res3'], features_p1['res3'])
+        #     output_res4 = self.cross_attention_res4(features_p2['res4'], features_p1['res4'])
+        #     output_res5 = self.cross_attention_res5(features_p2['res5'], features_p1['res5'])
+
+
+        #     outputs = {
+        #    'res2': output_res2,
+        #    'res3': output_res3,
+        #    'res4': output_res4,
+        #    'res5': output_res5}
+            
+
+            # 应用交叉注意力块到每个尺度的特征图
+        # output_res2 = self.cross_attention_res2(features_p2['res2'], features_p1['res2'])
+        output_res3 = self.cross_attention_res3(features_p2['res3'], features_p1['res3'])
+        output_res4 = self.cross_attention_res4(features_p2['res4'], features_p1['res4'])
+        output_res5 = self.cross_attention_res5(features_p2['res5'], features_p1['res5'])
+
+
+        features_sum = {
+        #'res2': output_res2,
+        'res2': features_p1["res2"],
+        'res3': output_res3,
+        # 'res3': features_p1["res3"],
+        'res4': output_res4,
+        # 'res4': features_p1["res4"],
+        'res5': output_res5,  
+        # 'res5': features_p1["res5"],
+            }
+        outputs=self.sem_seg_head(features_sum)
 
         if self.training:
             # mask classification target

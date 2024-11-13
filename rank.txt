@@ -1,0 +1,61 @@
+
+world size: 2
+dist_url: tcp://127.0.0.1:49152
+world size: 2
+dist_url: tcp://127.0.0.1:49152
+Local rank: 1
+Local rank: 1
+Local rank: 0
+Local rank: 0
+world size: 2
+dist_url: tcp://127.0.0.1:49152
+world size: 2
+dist_url: tcp://127.0.0.1:49152
+Local rank: 1
+Local rank: 0
+Local rank: 1
+Local rank: 0
+world size: 2
+dist_url: tcp://127.0.0.1:49152
+world size: 2
+dist_url: tcp://127.0.0.1:49152
+Local rank: 0
+Local rank: 0
+Local rank: 1
+Local rank: 1
+world size: 2
+dist_url: tcp://127.0.0.1:49152
+world size: 2
+dist_url: tcp://127.0.0.1:49152
+Local rank: 0
+Local rank: 1
+Local rank: 1
+Local rank: 0
+world size: 2
+dist_url: tcp://127.0.0.1:49152
+world size: 2
+dist_url: tcp://127.0.0.1:49152
+Local rank: 1
+Local rank: 1
+Local rank: 0
+Local rank: 0
+world size: 2
+dist_url: tcp://127.0.0.1:49152
+Local rank: 1
+Local rank: 0
+world size: 2
+dist_url: tcp://127.0.0.1:49152
+Local rank: 0
+Local rank: 1
+world size: 2
+dist_url: tcp://127.0.0.1:49152
+Local rank: 0
+Local rank: 1
+world size: 2
+dist_url: tcp://127.0.0.1:49152
+Local rank: 0
+Local rank: 1
+world size: 2
+dist_url: tcp://127.0.0.1:49152
+Local rank: 0
+Local rank: 1
