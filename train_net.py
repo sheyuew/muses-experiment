@@ -19,13 +19,13 @@ import os
 
 from collections import OrderedDict
 from typing import Any, Dict, List, Set
-
+from detectron2.utils.file_io import PathManager
 import torch
-
+import json
 import detectron2.utils.comm as comm
 from detectron2.checkpoint import DetectionCheckpointer
 from detectron2.config import get_cfg
-from detectron2.data import MetadataCatalog, build_detection_train_loader
+from detectron2.data import DatasetCatalog, MetadataCatalog, build_detection_train_loader
 from detectron2.engine import (
     DefaultTrainer,
     default_argument_parser,
@@ -46,6 +46,13 @@ from detectron2.projects.deeplab import add_deeplab_config, build_lr_scheduler
 from detectron2.solver.build import maybe_add_gradient_clipping
 from detectron2.utils.logger import setup_logger
 
+from detectron2.data.datasets import register_coco_panoptic
+from detectron2.engine import default_argument_parser, launch
+from detectron2.checkpoint import DetectionCheckpointer
+from detectron2.evaluation import verify_results
+from detectron2.data.datasets.coco_panoptic import load_coco_panoptic_json
+from torch.utils.tensorboard import SummaryWriter
+from detectron2.utils.events import EventStorage
 # MaskFormer
 from mask2former import (
     COCOInstanceNewBaselineDatasetMapper,
@@ -58,6 +65,39 @@ from mask2former import (
     add_maskformer2_config,
 )
 
+from torch import dist, nn
+class DualBackbone(nn.Module):
+    def __init__(self, backbone1, backbone2):
+        super(DualBackbone, self).__init__()
+        self.backbone1 = backbone1
+        self.backbone2 = backbone2
+
+    def forward(self, input1, input2):
+        features1 = self.backbone1(input1)
+        features2 = self.backbone2(input2)
+        return features1, features2
+
+
+# 全局变量来存储调用次数
+call_count = 0
+
+def count_calls_to_file(func):
+    """装饰器，用于计数函数调用次数并写入文件"""
+    def wrapper(*args, **kwargs):
+        global call_count
+        
+        # 增加调用计数
+        call_count += 1
+        
+        # 写入新的调用次数
+        with open("call_count.txt", "a") as f:
+            f.write(f"{str(call_count)}\n{func.__name__}\n")
+            
+
+        print(f"{func.__name__} 被调用了 {call_count} 次")
+        return func(*args, **kwargs)  # 调用原始函数
+
+    return wrapper
 
 class Trainer(DefaultTrainer):
     """
@@ -97,11 +137,14 @@ class Trainer(DefaultTrainer):
             "mapillary_vistas_panoptic_seg",
         ]:
             if cfg.MODEL.MASK_FORMER.TEST.PANOPTIC_ON:
+                # print("cfg.MODEL.MASK_FORMER.TEST.PANOPTIC_ON")
                 evaluator_list.append(COCOPanopticEvaluator(dataset_name, output_folder))
         # COCO
         if evaluator_type == "coco_panoptic_seg" and cfg.MODEL.MASK_FORMER.TEST.INSTANCE_ON:
+            # print("cfg.MODEL.MASK_FORMER.TEST.INSTANCE_ON")
             evaluator_list.append(COCOEvaluator(dataset_name, output_dir=output_folder))
         if evaluator_type == "coco_panoptic_seg" and cfg.MODEL.MASK_FORMER.TEST.SEMANTIC_ON:
+            # print("cfg.MODEL.MASK_FORMER.TEST.SEMANTIC_ON")
             evaluator_list.append(SemSegEvaluator(dataset_name, distributed=True, output_dir=output_folder))
         # Mapillary Vistas
         if evaluator_type == "mapillary_vistas_panoptic_seg" and cfg.MODEL.MASK_FORMER.TEST.INSTANCE_ON:
@@ -276,27 +319,222 @@ class Trainer(DefaultTrainer):
         res = cls.test(cfg, model, evaluators)
         res = OrderedDict({k + "_TTA": v for k, v in res.items()})
         return res
-
-
+@count_calls_to_file
 def setup(args):
-    """
-    Create configs and perform basic setups.
-    """
     cfg = get_cfg()
-    # for poly lr schedule
     add_deeplab_config(cfg)
     add_maskformer2_config(cfg)
     cfg.merge_from_file(args.config_file)
     cfg.merge_from_list(args.opts)
+    
+    # 设置训练数据集名称
+    cfg.DATASETS.TRAIN = ("muses_panoptic_train",)
+    cfg.DATASETS.TEST = ("muses_panoptic_val",)
+
+    cfg.DATALOADER.NUM_WORKERS=1
+    
+    # 设置批量大小为2
+    cfg.SOLVER.IMS_PER_BATCH = 2
+    cfg.SOLVER.BASE_LR=0.0002
+    # 设置最大迭代次数为10000
+    cfg.SOLVER.MAX_ITER = 2000
+    # cfg.SOLVER.STEPS = (200,500)
+    cfg.SOLVER.AMP.ENABLED = True  # 启用混合精度训练
+
+    # 设置帧相机网络相关配置
+    cfg.MODEL.MASK_FORMER.TEST.SEMANTIC_ON = False  # 禁用语义分割测试
+    cfg.MODEL.MASK_FORMER.TEST.INSTANCE_ON = False  # 禁用实例分割测试
+    # cfg.MODEL.NUM_CLASSES= 19
+    cfg.MODEL.RETINANET.SCORE_THRESH_TEST=0.5
+    
+    # 其他可能需要的帧相机网络相关配置
+    # cfg.MODEL.FPN...
+    # cfg.MODEL.ROI_HEADS...
+
+    
     cfg.freeze()
     default_setup(cfg, args)
-    # Setup logger for "mask_former" module
     setup_logger(output=cfg.OUTPUT_DIR, distributed_rank=comm.get_rank(), name="mask2former")
     return cfg
 
+import os
+import json
+from detectron2.data import DatasetCatalog, MetadataCatalog
+
+def load_coco_panoptic_json_with_string_ids(json_file, image_dir, gt_dir, add_dir,meta):
+    with open(json_file) as f:
+        dataset = json.load(f)
+
+    # 创建一个映射，将字符串ID映射到整数ID
+    id_map = {img['file_name'].split('.')[0]: idx for idx, img in enumerate(dataset['images'])}
+
+    # 从数据集中提取类别信息
+    categories = dataset['categories']
+    thing_classes = [cat['name'] for cat in categories if cat['isthing'] == 1]
+    stuff_classes = [cat['name'] for cat in categories if cat['isthing'] == 0]
+    thing_dataset_id_to_contiguous_id = {cat['id']: i for i, cat in enumerate(categories) if cat['isthing'] == 1}
+    stuff_dataset_id_to_contiguous_id = {cat['id']: i for i, cat in enumerate(categories) if cat['isthing'] == 0}
+
+    meta.update({
+        "thing_classes": thing_classes,
+        "stuff_classes": stuff_classes,
+        "thing_dataset_id_to_contiguous_id": thing_dataset_id_to_contiguous_id,
+        "stuff_dataset_id_to_contiguous_id": stuff_dataset_id_to_contiguous_id
+    })
+
+    def _convert_category_id(segment_info, meta):
+        if segment_info["category_id"] in meta["thing_dataset_id_to_contiguous_id"]:
+            segment_info["category_id"] = meta["thing_dataset_id_to_contiguous_id"][segment_info["category_id"]]
+            segment_info["isthing"] = True
+        else:
+            segment_info["category_id"] = meta["stuff_dataset_id_to_contiguous_id"][segment_info["category_id"]]
+            segment_info["isthing"] = False
+        return segment_info
+
+    ret = []
+    for ann in dataset["annotations"]:
+        image_id = ann["image_id"]
+        if isinstance(image_id, str):
+            image_id = id_map.get(image_id, len(id_map))
+            id_map[image_id] = image_id
+        else:
+            image_id = int(image_id)
+
+        image_file = os.path.join(image_dir, os.path.splitext(ann["file_name"])[0] + ".jpg")
+        label_file = os.path.join(gt_dir, ann["file_name"])
+        
+        # 添加 add_dir 的内容
+        add_file_name = os.path.join(add_dir, os.path.splitext(ann['file_name'])[0] + ".jpg")  # 假设 add_dir 中有相应的 .txt 文件
+        # print(os.path.exists(add_file_name),add_file_name)
+
+        # 检查文件是否存在，并根据需要调整文件名或路径
+        if not os.path.exists(label_file):
+            raise FileNotFoundError(f"Panoptic segmentation file not found: {label_file}")
+
+        # 获取图像信息，如果缺少宽度或高度，尝试从文件中获取或设置默认值
+        image_info = next((img for img in dataset["images"] if img["id"] == ann["image_id"]), None)
+        
+        if image_info is None:
+            raise ValueError(f"No image info found for image ID: {ann['image_id']}")
+
+        width = image_info.get("width")
+        height = image_info.get("height")
+        
+        if width is None or height is None:
+            from PIL import Image
+            with Image.open(image_file) as img:
+                width, height = img.size
+
+            image_info["width"] = width
+            image_info["height"] = height
+
+        segments_info = [_convert_category_id(x, meta) for x in ann.get("segments_info", [])]
+        # 打开文件
+        with open("load_segments_info.txt", "a") as file:
+         # 遍历 segments_info 并格式化输出到文件中
+            for segment in segments_info:
+                category_id = segment.get("category_id")
+                segment_id = segment.get("id")
+                iscrowd = segment.get("iscrowd")
+                isthing = segment.get("isthing")
+                file.write(f"Segment ID: {segment_id}, Category ID: {category_id}, Is Crowd: {iscrowd}, Is Thing: {isthing}\n")
+
+            ret.append(
+            {
+                "file_name": image_file,
+                'add_file_name': add_file_name,
+                "image_id": image_id,
+                "pan_seg_file_name": label_file,
+                "segments_info": segments_info,
+                "width": width,
+                "height": height,
+            }
+        )
+
+    assert len(ret), f"No images found in {image_dir}!"
+    
+    return ret
+
+
+@count_calls_to_file
+def register_my_datasets():
+    # Configure the absolute paths for the datasets
+    train_img_dir = "/root/autodl-tmp/data/muses/frame_camera_jpg_rename"
+    lidar_dir ="/root/autodl-tmp/data/muses/projected_to_rgb/lidar_rename" 
+    train_panoptic_dir = "/root/autodl-tmp/data/muses/gt_panoptic"
+    train_panoptic_ann_file = "/root/autodl-tmp/data/muses/gt_panoptic/train.json"
+
+    val_img_dir = "/root/autodl-tmp/data/muses/frame_camera_jpg_rename"
+    val_panoptic_dir = "/root/autodl-tmp/data/muses/gt_panoptic"
+    val_panoptic_ann_file = "/root/autodl-tmp/data/muses/gt_panoptic/val.json"
+
+    for d in ["train", "val"]:
+        name = f"muses_panoptic_{d}"
+        image_dir = train_img_dir if d == "train" else val_img_dir
+        panoptic_dir = train_panoptic_dir if d == "train" else val_panoptic_dir
+        panoptic_json = train_panoptic_ann_file if d == "train" else val_panoptic_ann_file
+        
+        # if d =="train":
+        #     # Register the dataset with all necessary arguments
+        #     DatasetCatalog.register(
+        #         name,
+        #         lambda x=panoptic_json, y=image_dir, z=panoptic_dir,r=train_lidar_dir: load_coco_panoptic_json_with_string_ids(x, y, z, r, {})
+        #     )
+        # else:
+        #     # Register the dataset with all necessary arguments
+        #     DatasetCatalog.register(
+        #         name,
+        #         lambda x=panoptic_json, y=image_dir, z=panoptic_dir: load_coco_panoptic_json_with_string_ids_only(x, y, z, {})
+        #     )
+
+        # Register the dataset with all necessary arguments
+                # Unregister the dataset if it already exists
+        DatasetCatalog.register(
+            name,
+            lambda x=panoptic_json, y=image_dir, z=panoptic_dir,r=lidar_dir: load_coco_panoptic_json_with_string_ids(x, y, z,r,{})
+        )
+
+        # Set metadata
+        metadata = MetadataCatalog.get(name)
+        metadata.set(
+            panoptic_root=panoptic_dir,
+            image_root=image_dir,
+            train_lidar_dir=lidar_dir,
+            panoptic_json=panoptic_json,
+            evaluator_type="coco_panoptic_seg",  # 设置评估类型为全景分割
+            ignore_label=255,  # 设置忽略标签值（根据需要调整）
+        )
+        
+        # Load and set category information
+        with open(panoptic_json) as f:
+            dataset = json.load(f)
+        
+        categories = dataset['categories']
+        metadata.thing_classes = [cat['name'] for cat in categories if cat['isthing'] == 1]
+        metadata.stuff_classes = [cat['name'] for cat in categories if cat['isthing'] == 0]
+        
+        # Create mappings from dataset category IDs to contiguous IDs
+        thing_dataset_id_to_contiguous_id = {cat['id']: i for i, cat in enumerate(categories) if cat['isthing'] == 1}
+        stuff_dataset_id_to_contiguous_id = {cat['id']: i for i, cat in enumerate(categories) if cat['isthing'] == 0}
+         # 将类别映射保存到文件
+        with open("category_mappings.txt", "w") as f:
+            f.write("Thing Dataset ID to Contiguous ID:\n")
+            for key, value in thing_dataset_id_to_contiguous_id.items():
+                f.write(f"{key}: {value}\n")
+        
+            f.write("\nStuff Dataset ID to Contiguous ID:\n")
+            for key, value in stuff_dataset_id_to_contiguous_id.items():
+                f.write(f"{key}: {value}\n")
+ 
+        metadata.thing_dataset_id_to_contiguous_id = thing_dataset_id_to_contiguous_id
+        metadata.stuff_dataset_id_to_contiguous_id = stuff_dataset_id_to_contiguous_id
 
 def main(args):
+    register_my_datasets()
+
     cfg = setup(args)
+    # 初始化 TensorBoard Writer
+    writer = SummaryWriter(log_dir=cfg.OUTPUT_DIR)
 
     if args.eval_only:
         model = Trainer.build_model(cfg)
@@ -312,10 +550,12 @@ def main(args):
 
     trainer = Trainer(cfg)
     trainer.resume_or_load(resume=args.resume)
+
+    writer.close()  # 关闭 TensorBoard Writer
     return trainer.train()
 
-
 if __name__ == "__main__":
+    
     args = default_argument_parser().parse_args()
     print("Command Line Args:", args)
     launch(
